@@ -1,0 +1,14 @@
+.DS_Store
+*.cmd
+*.ko
+*.mod
+*.mod.c
+*.o
+*.order
+*.symvers
+.cache/
+.tmp_versions/
+out/
+Module.markers
+modules.builtin
+modules.builtin.modinfo
