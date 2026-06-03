@@ -34,6 +34,7 @@ struct Options {
 	int unit = -1;
 	int timeout_ms = -1;
 	int max_events = -1;
+	int drop_uid = -1;
 	bool once = false;
 	bool status_only = false;
 	bool detach = false;
@@ -83,7 +84,7 @@ void usage(const char *argv0)
 {
 	fprintf(stderr,
 		"usage: %s [--unit N] [--status] [--once] [--timeout MS] "
-		"[--max-events N] [--detach] [--no-prctl]\n"
+		"[--max-events N] [--drop-uid N] [--detach] [--no-prctl]\n"
 		"\n"
 		"Default flow: prctl discover unit, bind netlink, prctl register, "
 		"send status, then listen.\n",
@@ -115,6 +116,9 @@ bool parse_args(int argc, char **argv, Options *options)
 				return false;
 		} else if (!strcmp(argv[i], "--max-events")) {
 			if (++i >= argc || !parse_int(argv[i], &options->max_events))
+				return false;
+		} else if (!strcmp(argv[i], "--drop-uid")) {
+			if (++i >= argc || !parse_int(argv[i], &options->drop_uid))
 				return false;
 		} else if (!strcmp(argv[i], "--once")) {
 			options->once = true;
@@ -362,6 +366,17 @@ int main(int argc, char **argv)
 	if (!parse_args(argc, argv, &options)) {
 		usage(argv[0]);
 		return 2;
+	}
+
+	if (options.drop_uid >= 0) {
+		if (setresgid(options.drop_uid, options.drop_uid,
+			      options.drop_uid) ||
+		    setresuid(options.drop_uid, options.drop_uid,
+			      options.drop_uid)) {
+			perror("drop uid");
+			return 1;
+		}
+		printf("dropped uid/gid to %d\n", options.drop_uid);
 	}
 
 	unit = options.unit;

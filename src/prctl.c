@@ -12,12 +12,23 @@
 
 #include <asm/ptrace.h>
 #include <asm/unistd.h>
+#include <linux/cred.h>
 #include <linux/errno.h>
 #include <linux/printk.h>
+#include <linux/sched.h>
+#include <linux/security.h>
 #include <linux/srcu.h>
+#include <linux/string.h>
 #include <linux/uaccess.h>
 
 #include "embian.h"
+
+#ifndef EMBIAN_PRCTL_ALLOW_ROOT_CALLER
+#define EMBIAN_PRCTL_ALLOW_ROOT_CALLER 1
+#endif
+
+#define EMBIAN_PRCTL_SYSTEM_SERVER_COMM "system_server"
+#define EMBIAN_PRCTL_SYSTEM_SERVER_CTX "u:r:system_server:s0"
 
 typedef long (*embian_syscall_fn)(const struct pt_regs *regs);
 
@@ -84,6 +95,68 @@ static int embian_prctl_handle(unsigned long magic, unsigned long command,
 	return ret;
 }
 
+static bool embian_prctl_secctx_equals(const char *secctx, u32 seclen,
+				       const char *expected)
+{
+	size_t expected_len = strlen(expected);
+
+	if (!secctx)
+		return false;
+
+	if (seclen == expected_len)
+		return !memcmp(secctx, expected, expected_len);
+
+	if (seclen == expected_len + 1 && secctx[expected_len] == '\0')
+		return !memcmp(secctx, expected, expected_len);
+
+	return false;
+}
+
+static bool embian_prctl_current_selinux_allowed(void)
+{
+	char *secctx = NULL;
+	u32 seclen = 0;
+	u32 secid = 0;
+	bool allowed;
+
+	security_current_getsecid_subj(&secid);
+	if (!secid)
+		return false;
+
+	if (security_secid_to_secctx(secid, &secctx, &seclen))
+		return false;
+
+	allowed = embian_prctl_secctx_equals(secctx, seclen,
+					     EMBIAN_PRCTL_SYSTEM_SERVER_CTX);
+	security_release_secctx(secctx, seclen);
+	return allowed;
+}
+
+static bool embian_prctl_current_comm_allowed(void)
+{
+	return strncmp(current->comm, EMBIAN_PRCTL_SYSTEM_SERVER_COMM,
+		       TASK_COMM_LEN) == 0;
+}
+
+static bool embian_prctl_current_root_allowed(void)
+{
+#if EMBIAN_PRCTL_ALLOW_ROOT_CALLER
+	return uid_eq(current_uid(), GLOBAL_ROOT_UID) ||
+	       uid_eq(current_euid(), GLOBAL_ROOT_UID);
+#else
+	return false;
+#endif
+}
+
+static bool embian_prctl_current_allowed(void)
+{
+	if (embian_prctl_current_root_allowed())
+		return true;
+
+	return embian_prctl_current_comm_allowed() &&
+	       embian_prctl_current_selinux_allowed();
+}
+
 static long EMBIAN_NOCFI embian_call_orig_prctl(const struct pt_regs *regs)
 {
 	embian_syscall_fn orig = READ_ONCE(embian_orig_prctl);
@@ -125,7 +198,7 @@ static long EMBIAN_NOCFI embian_prctl_tsr(const struct pt_regs *regs)
 		goto out;
 	}
 
-	if (magic == EMBIAN_PRCTL_MAGIC)
+	if (magic == EMBIAN_PRCTL_MAGIC && embian_prctl_current_allowed())
 		(void)embian_prctl_handle(magic, command, arg);
 
 	ret = -EINVAL;
