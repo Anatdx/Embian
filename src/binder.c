@@ -430,10 +430,6 @@ static void embian_binder_transaction_event(u32 event_type,
 	event.offsets_size = (u32)min_t(binder_size_t, tr->offsets_size,
 					U32_MAX);
 
-	if (event_type == EMBIAN_EVENT_BINDER_TRANSACTION && oneway &&
-	    (tr->code < 29 || tr->code > 32))
-		return;
-
 	if (event_type == EMBIAN_EVENT_BINDER_TRANSACTION)
 		embian_binder_parse_interface(&event, tr);
 
