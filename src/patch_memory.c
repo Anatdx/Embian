@@ -43,18 +43,23 @@ struct embian_patch_info {
 static int embian_patch_resolve_symbols(void)
 {
 	if (!embian_init_mm)
-		embian_init_mm = (void *)embian_lookup_name("init_mm");
+		embian_init_mm =
+			(void *)embian_symbol_addr(EMBIAN_SYM_INIT_MM);
 	if (!embian_set_fixmap)
-		embian_set_fixmap = (void *)embian_lookup_name("__set_fixmap");
+		embian_set_fixmap =
+			(void *)embian_symbol_addr(EMBIAN_SYM_SET_FIXMAP);
 	if (!embian_dcache_clean_inval_poc)
 		embian_dcache_clean_inval_poc =
-			(void *)embian_lookup_name_quiet("dcache_clean_inval_poc");
+			(void *)embian_symbol_addr(
+				EMBIAN_SYM_DCACHE_CLEAN_INVAL_POC);
 	if (!embian_flush_dcache_area)
 		embian_flush_dcache_area =
-			(void *)embian_lookup_name_quiet("__flush_dcache_area");
+			(void *)embian_symbol_addr(
+				EMBIAN_SYM_FLUSH_DCACHE_AREA);
 	if (!embian_caches_clean_inval_pou)
 		embian_caches_clean_inval_pou =
-			(void *)embian_lookup_name_quiet("caches_clean_inval_pou");
+			(void *)embian_symbol_addr(
+				EMBIAN_SYM_CACHES_CLEAN_INVAL_POU);
 
 	if (!embian_init_mm || !embian_set_fixmap) {
 		pr_warn("missing patch symbols init_mm=%px __set_fixmap=%px\n",

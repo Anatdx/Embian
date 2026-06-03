@@ -10,7 +10,6 @@
 
 #define pr_fmt(fmt) "embian: binder: " fmt
 
-#include <linux/container_of.h>
 #include <linux/cgroup.h>
 #include <linux/freezer.h>
 #include <linux/kernel.h>
@@ -28,37 +27,19 @@
 
 #include "embian.h"
 
-struct embian_binder_symbol {
-	const char *name;
-	unsigned long addr;
-	bool required;
-};
-
-static struct embian_binder_symbol embian_binder_symbols[] = {
-	{ "binder_transaction", 0, false },
-	{ "binder_proc_transaction", 0, false },
-	{ "binder_transaction_buffer_release", 0, false },
-	{ "binder_alloc_free_buf", 0, false },
-	{ "binder_stats", 0, false },
-};
-
 static void embian_binder_resolve_symbols(void)
 {
+	static const enum embian_symbol_id ids[] = {
+		EMBIAN_SYM_BINDER_TRANSACTION,
+		EMBIAN_SYM_BINDER_PROC_TRANSACTION,
+		EMBIAN_SYM_BINDER_TRANSACTION_BUFFER_RELEASE,
+		EMBIAN_SYM_BINDER_ALLOC_FREE_BUF,
+		EMBIAN_SYM_BINDER_STATS,
+	};
 	size_t i;
 
-	for (i = 0; i < ARRAY_SIZE(embian_binder_symbols); i++) {
-		struct embian_binder_symbol *symbol = &embian_binder_symbols[i];
-
-		symbol->addr = embian_lookup_name_quiet(symbol->name);
-		if (symbol->addr) {
-			pr_info("resolved %s @ 0x%lx\n", symbol->name,
-				symbol->addr);
-		} else if (symbol->required) {
-			pr_warn("required symbol missing: %s\n", symbol->name);
-		} else {
-			pr_debug("optional symbol missing: %s\n", symbol->name);
-		}
-	}
+	for (i = 0; i < ARRAY_SIZE(ids); i++)
+		(void)embian_symbol_addr(ids[i]);
 }
 
 static u32 embian_task_uid_value(const struct task_struct *task)
@@ -281,11 +262,11 @@ static void embian_binder_reply(void *data, struct binder_proc *target_proc,
 					proc, tr);
 }
 
-static void embian_binder_alloc_new_buf_locked(void *data, size_t size,
-					       size_t *free_async_space,
-					       int is_async, bool *should_fail)
+static void embian_binder_alloc_pressure_event(size_t size,
+					       struct binder_alloc *alloc,
+					       size_t free_async_space,
+					       int is_async, const bool *should_fail)
 {
-	struct binder_alloc *alloc;
 	struct task_struct *target;
 	struct embian_binder_event event = {
 		.event_type = EMBIAN_EVENT_BINDER_ASYNC_PRESSURE,
@@ -296,13 +277,11 @@ static void embian_binder_alloc_new_buf_locked(void *data, size_t size,
 	if (!embian_control_has_client())
 		return;
 
-	if (!is_async || !free_async_space)
+	if (!is_async || !alloc)
 		return;
 
-	alloc = container_of(free_async_space, struct binder_alloc,
-			     free_async_space);
 	event.target_pid = alloc->pid;
-	event.free_async_space = (u32)min_t(size_t, *free_async_space,
+	event.free_async_space = (u32)min_t(size_t, free_async_space,
 					   U32_MAX);
 
 	if (!should_fail && event.free_async_space >= EMBIAN_BINDER_ASYNC_WARN_SPACE)
@@ -329,6 +308,47 @@ static void embian_binder_alloc_new_buf_locked(void *data, size_t size,
 
 	embian_binder_send_event(&event);
 }
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0)
+static void embian_binder_alloc_new_buf_locked(void *data, size_t size,
+					       size_t *free_async_space,
+					       int is_async, bool *should_fail)
+{
+	struct binder_alloc *alloc;
+
+	if (!free_async_space)
+		return;
+
+	alloc = container_of(free_async_space, struct binder_alloc,
+			     free_async_space);
+	embian_binder_alloc_pressure_event(size, alloc, *free_async_space,
+					   is_async, should_fail);
+}
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)
+static void embian_binder_alloc_new_buf_locked(void *data, size_t size,
+					       size_t *free_async_space,
+					       int is_async)
+{
+	struct binder_alloc *alloc;
+
+	if (!free_async_space)
+		return;
+
+	alloc = container_of(free_async_space, struct binder_alloc,
+			     free_async_space);
+	embian_binder_alloc_pressure_event(size, alloc, *free_async_space,
+					   is_async, NULL);
+}
+#else
+static void embian_binder_alloc_new_buf_locked(void *data, size_t size,
+					       struct binder_alloc *alloc,
+					       int is_async)
+{
+	embian_binder_alloc_pressure_event(size, alloc,
+					   alloc ? alloc->free_async_space : 0,
+					   is_async, NULL);
+}
+#endif
 
 int embian_binder_init(void)
 {

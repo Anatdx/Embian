@@ -20,6 +20,7 @@
 #include <linux/srcu.h>
 #include <linux/string.h>
 #include <linux/uaccess.h>
+#include <linux/version.h>
 
 #include "embian.h"
 
@@ -119,7 +120,11 @@ static bool embian_prctl_current_selinux_allowed(void)
 	u32 secid = 0;
 	bool allowed;
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0)
 	security_current_getsecid_subj(&secid);
+#else
+	security_cred_getsecid(current_cred(), &secid);
+#endif
 	if (!secid)
 		return false;
 
@@ -214,7 +219,8 @@ int embian_prctl_init(void)
 	embian_syscall_fn hook = embian_prctl_tsr;
 	int ret;
 
-	embian_sys_call_table = (void **)embian_lookup_name("sys_call_table");
+	embian_sys_call_table =
+		(void **)embian_symbol_addr(EMBIAN_SYM_SYS_CALL_TABLE);
 	if (!embian_sys_call_table) {
 		pr_warn("sys_call_table not found; prctl control unavailable\n");
 		return 0;

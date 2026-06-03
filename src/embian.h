@@ -53,6 +53,25 @@ int embian_symbols_init(void);
 void embian_symbols_exit(void);
 EMBIAN_NOCFI unsigned long embian_lookup_name(const char *name);
 EMBIAN_NOCFI unsigned long embian_lookup_name_quiet(const char *name);
+unsigned long embian_lookup_name_any(const char * const *names, bool quiet);
+
+enum embian_symbol_id {
+	EMBIAN_SYM_SYS_CALL_TABLE,
+	EMBIAN_SYM_INIT_MM,
+	EMBIAN_SYM_SET_FIXMAP,
+	EMBIAN_SYM_DCACHE_CLEAN_INVAL_POC,
+	EMBIAN_SYM_FLUSH_DCACHE_AREA,
+	EMBIAN_SYM_CACHES_CLEAN_INVAL_POU,
+	EMBIAN_SYM_BINDER_TRANSACTION,
+	EMBIAN_SYM_BINDER_PROC_TRANSACTION,
+	EMBIAN_SYM_BINDER_TRANSACTION_BUFFER_RELEASE,
+	EMBIAN_SYM_BINDER_ALLOC_FREE_BUF,
+	EMBIAN_SYM_BINDER_STATS,
+	EMBIAN_SYM_COUNT,
+};
+
+unsigned long embian_symbol_addr(enum embian_symbol_id id);
+const char *embian_symbol_name(enum embian_symbol_id id);
 
 int embian_patch_text(void *dst, const void *src, size_t len);
 
