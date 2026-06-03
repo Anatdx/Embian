@@ -46,9 +46,15 @@ static int __init embian_init(void)
 	if (ret)
 		goto err_binder;
 
+	ret = embian_network_init();
+	if (ret)
+		goto err_signal;
+
 	pr_info("loaded, netlink unit=%d\n", embian_netlink_unit());
 	return 0;
 
+err_signal:
+	embian_signal_exit();
 err_binder:
 	embian_binder_exit();
 err_netlink:
@@ -64,6 +70,7 @@ err_control:
 
 static void __exit embian_exit(void)
 {
+	embian_network_exit();
 	embian_signal_exit();
 	embian_binder_exit();
 	embian_netlink_exit();

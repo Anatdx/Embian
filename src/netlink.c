@@ -72,7 +72,29 @@ static int embian_netlink_send_to(u32 portid, u16 type, u32 seq, s32 status,
 	return netlink_unicast(embian_nl_sock, skb, portid, MSG_DONTWAIT);
 }
 
+static bool embian_netlink_portid_is_client(u32 portid)
+{
+	return portid && portid == embian_control_portid();
+}
+
+static s32 embian_netlink_handle_network_uid(const void *payload,
+					     size_t payload_len, u32 portid,
+					     int (*action)(u32))
+{
+	struct embian_network_uid_args args;
+
+	if (!embian_netlink_portid_is_client(portid))
+		return -EPERM;
+
+	if (payload_len < sizeof(args))
+		return -EINVAL;
+
+	memcpy(&args, payload, sizeof(args));
+	return action(args.uid);
+}
+
 static void embian_netlink_handle_msg(const struct embian_netlink_msg *msg,
+				      const void *payload, size_t payload_len,
 				      u32 portid)
 {
 	struct embian_control_snapshot snapshot;
@@ -104,6 +126,23 @@ static void embian_netlink_handle_msg(const struct embian_netlink_msg *msg,
 		break;
 	case EMBIAN_NL_CMD_DETACH:
 		embian_control_detach_portid(portid);
+		status = 0;
+		break;
+	case EMBIAN_NL_CMD_NETWORK_ADD_UID:
+		status = embian_netlink_handle_network_uid(
+			payload, payload_len, portid, embian_network_add_uid);
+		break;
+	case EMBIAN_NL_CMD_NETWORK_REMOVE_UID:
+		status = embian_netlink_handle_network_uid(
+			payload, payload_len, portid,
+			embian_network_remove_uid);
+		break;
+	case EMBIAN_NL_CMD_NETWORK_CLEAR:
+		if (!embian_netlink_portid_is_client(portid)) {
+			status = -EPERM;
+			break;
+		}
+		embian_network_clear();
 		status = 0;
 		break;
 	default:
@@ -143,7 +182,9 @@ static void embian_netlink_recv(struct sk_buff *skb)
 
 	memcpy(&msg, nlmsg_data(nlh), sizeof(msg));
 	portid = NETLINK_CB(skb).portid;
-	embian_netlink_handle_msg(&msg, portid);
+	embian_netlink_handle_msg(&msg,
+				  (const u8 *)nlmsg_data(nlh) + sizeof(msg),
+				  nlmsg_len(nlh) - sizeof(msg), portid);
 }
 
 int embian_netlink_init(void)

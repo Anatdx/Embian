@@ -11,7 +11,8 @@ embian-y := \
 	src/prctl.o \
 	src/netlink.o \
 	src/binder.o \
-	src/signal.o
+	src/signal.o \
+	src/network.o
 
 ccflags-y += -I$(src)/src
 ccflags-y += -I$(src)/include

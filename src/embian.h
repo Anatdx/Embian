@@ -97,4 +97,11 @@ void embian_binder_exit(void);
 int embian_signal_init(void);
 void embian_signal_exit(void);
 
+int embian_network_init(void);
+void embian_network_exit(void);
+int embian_network_add_uid(u32 uid);
+int embian_network_remove_uid(u32 uid);
+void embian_network_clear(void);
+u32 embian_network_uid_count(void);
+
 #endif /* EMBIAN_H */

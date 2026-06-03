@@ -25,7 +25,17 @@ typedef int32_t embian_s32;
 
 #define EMBIAN_PRCTL_OPTION 0x454d4249u
 #define EMBIAN_PRCTL_MAGIC 0x45424941u
-#define EMBIAN_CTL_ABI_VERSION 2u
+#define EMBIAN_CTL_ABI_VERSION 3u
+
+#define EMBIAN_NETWORK_PROTO_IPV4 4u
+#define EMBIAN_NETWORK_PROTO_IPV6 6u
+
+#define EMBIAN_NETWORK_TCP_FIN (1u << 0)
+#define EMBIAN_NETWORK_TCP_SYN (1u << 1)
+#define EMBIAN_NETWORK_TCP_RST (1u << 2)
+#define EMBIAN_NETWORK_TCP_PSH (1u << 3)
+#define EMBIAN_NETWORK_TCP_ACK (1u << 4)
+#define EMBIAN_NETWORK_TCP_URG (1u << 5)
 
 #define EMBIAN_NETLINK_MIN 25
 #define EMBIAN_NETLINK_MAX 31
@@ -59,6 +69,13 @@ enum embian_netlink_command {
 	EMBIAN_NL_CMD_PING = 2,
 	EMBIAN_NL_CMD_STATUS = 3,
 	EMBIAN_NL_CMD_DETACH = 4,
+	EMBIAN_NL_CMD_NETWORK_ADD_UID = 5,
+	EMBIAN_NL_CMD_NETWORK_REMOVE_UID = 6,
+	EMBIAN_NL_CMD_NETWORK_CLEAR = 7,
+};
+
+struct embian_network_uid_args {
+	embian_u32 uid;
 };
 
 enum embian_netlink_message_type {
@@ -73,6 +90,7 @@ enum embian_event_type {
 	EMBIAN_EVENT_BINDER_ASYNC_PRESSURE = 3,
 	EMBIAN_EVENT_BINDER_ASYNC_CLEANUP = 4,
 	EMBIAN_EVENT_SIGNAL = 5,
+	EMBIAN_EVENT_NETWORK = 6,
 };
 
 struct embian_netlink_msg {
@@ -110,6 +128,16 @@ struct embian_signal_event {
 	embian_u32 killer_uid;
 	embian_s32 dst_pid;
 	embian_u32 dst_uid;
+};
+
+struct embian_network_event {
+	embian_u32 event_type;
+	embian_u32 uid;
+	embian_u32 proto;
+	embian_u32 data_len;
+	embian_u32 tcp_flags;
+	embian_u16 src_port;
+	embian_u16 dst_port;
 };
 
 #endif /* EMBIAN_UAPI_H */

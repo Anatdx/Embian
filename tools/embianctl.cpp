@@ -30,6 +30,8 @@ namespace {
 
 volatile sig_atomic_t g_stop;
 
+constexpr int MAX_NET_UIDS = 32;
+
 struct Options {
 	int unit = -1;
 	int timeout_ms = -1;
@@ -39,6 +41,11 @@ struct Options {
 	bool status_only = false;
 	bool detach = false;
 	bool no_prctl = false;
+	bool clear_net_uids = false;
+	int add_net_uid_count = 0;
+	int remove_net_uid_count = 0;
+	uint32_t add_net_uids[MAX_NET_UIDS] = {};
+	uint32_t remove_net_uids[MAX_NET_UIDS] = {};
 };
 
 struct PrctlResult {
@@ -79,9 +86,47 @@ const char *event_name(uint32_t type)
 		return "binder_async_cleanup";
 	case EMBIAN_EVENT_SIGNAL:
 		return "signal";
+	case EMBIAN_EVENT_NETWORK:
+		return "network";
 	default:
 		return "unknown";
 	}
+}
+
+void print_tcp_flags(uint32_t flags)
+{
+	printf(" tcp_flags=");
+	bool first = true;
+	auto emit = [&](const char *name) {
+		printf("%s%s", first ? "" : "|", name);
+		first = false;
+	};
+	if (flags & EMBIAN_NETWORK_TCP_FIN) emit("FIN");
+	if (flags & EMBIAN_NETWORK_TCP_SYN) emit("SYN");
+	if (flags & EMBIAN_NETWORK_TCP_RST) emit("RST");
+	if (flags & EMBIAN_NETWORK_TCP_PSH) emit("PSH");
+	if (flags & EMBIAN_NETWORK_TCP_ACK) emit("ACK");
+	if (flags & EMBIAN_NETWORK_TCP_URG) emit("URG");
+	if (first)
+		emit("0");
+}
+
+void print_network_event(const uint8_t *payload, size_t len)
+{
+	const embian_network_event *event;
+
+	if (len < sizeof(*event)) {
+		printf("  short network payload len=%zu\n", len);
+		return;
+	}
+
+	event = reinterpret_cast<const embian_network_event *>(payload);
+	printf("  event=%s(%u) uid=%u proto=ipv%u src=%u dst=%u data_len=%u",
+	       event_name(event->event_type), event->event_type, event->uid,
+	       event->proto, event->src_port, event->dst_port,
+	       event->data_len);
+	print_tcp_flags(event->tcp_flags);
+	printf("\n");
 }
 
 void print_escaped_token(const char *token, uint32_t len)
@@ -111,6 +156,8 @@ void usage(const char *argv0)
 	fprintf(stderr,
 		"usage: %s [--unit N] [--status] [--once] [--timeout MS] "
 		"[--max-events N] [--drop-uid N] [--detach] [--no-prctl]\n"
+		"           [--add-net-uid N]... [--remove-net-uid N]... "
+		"[--clear-net-uids]\n"
 		"\n"
 		"Default flow: prctl discover unit, bind netlink, prctl register, "
 		"send status, then listen.\n",
@@ -155,6 +202,24 @@ bool parse_args(int argc, char **argv, Options *options)
 			options->once = true;
 		} else if (!strcmp(argv[i], "--no-prctl")) {
 			options->no_prctl = true;
+		} else if (!strcmp(argv[i], "--add-net-uid")) {
+			int uid;
+			if (++i >= argc || !parse_int(argv[i], &uid) || uid < 0)
+				return false;
+			if (options->add_net_uid_count >= MAX_NET_UIDS)
+				return false;
+			options->add_net_uids[options->add_net_uid_count++] =
+				static_cast<uint32_t>(uid);
+		} else if (!strcmp(argv[i], "--remove-net-uid")) {
+			int uid;
+			if (++i >= argc || !parse_int(argv[i], &uid) || uid < 0)
+				return false;
+			if (options->remove_net_uid_count >= MAX_NET_UIDS)
+				return false;
+			options->remove_net_uids[options->remove_net_uid_count++] =
+				static_cast<uint32_t>(uid);
+		} else if (!strcmp(argv[i], "--clear-net-uids")) {
+			options->clear_net_uids = true;
 		} else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
 			usage(argv[0]);
 			exit(0);
@@ -237,10 +302,21 @@ int open_netlink(int unit, uint32_t *portid)
 	return fd;
 }
 
-bool send_command(int fd, uint16_t type, uint32_t seq)
+constexpr size_t MAX_CMD_PAYLOAD = 64;
+
+bool send_command_payload(int fd, uint16_t type, uint32_t seq,
+			  const void *payload, size_t payload_len)
 {
 	embian_netlink_msg msg = {};
-	alignas(nlmsghdr) uint8_t buf[NLMSG_SPACE(sizeof(msg))] = {};
+
+	if (payload_len > MAX_CMD_PAYLOAD) {
+		fprintf(stderr, "payload too large: %zu\n", payload_len);
+		return false;
+	}
+
+	size_t total_len = sizeof(msg) + payload_len;
+	alignas(nlmsghdr) uint8_t
+		buf[NLMSG_SPACE(sizeof(msg) + MAX_CMD_PAYLOAD)] = {};
 	nlmsghdr *nlh = reinterpret_cast<nlmsghdr *>(buf);
 	sockaddr_nl kernel = {};
 	ssize_t sent;
@@ -251,13 +327,14 @@ bool send_command(int fd, uint16_t type, uint32_t seq)
 	msg.seq = seq;
 
 	kernel.nl_family = AF_NETLINK;
-	kernel.nl_pid = 0;
-	kernel.nl_groups = 0;
 
-	nlh->nlmsg_len = NLMSG_LENGTH(sizeof(msg));
+	nlh->nlmsg_len = NLMSG_LENGTH(total_len);
 	nlh->nlmsg_type = type;
 	nlh->nlmsg_seq = seq;
 	memcpy(NLMSG_DATA(nlh), &msg, sizeof(msg));
+	if (payload_len && payload)
+		memcpy(reinterpret_cast<uint8_t *>(NLMSG_DATA(nlh)) + sizeof(msg),
+		       payload, payload_len);
 
 	sent = sendto(fd, buf, nlh->nlmsg_len, 0,
 		      reinterpret_cast<sockaddr *>(&kernel), sizeof(kernel));
@@ -267,6 +344,18 @@ bool send_command(int fd, uint16_t type, uint32_t seq)
 	}
 
 	return true;
+}
+
+bool send_command(int fd, uint16_t type, uint32_t seq)
+{
+	return send_command_payload(fd, type, seq, nullptr, 0);
+}
+
+bool send_net_uid(int fd, uint16_t cmd, uint32_t uid, uint32_t seq)
+{
+	embian_network_uid_args args{};
+	args.uid = uid;
+	return send_command_payload(fd, cmd, seq, &args, sizeof(args));
 }
 
 void print_signal_event(const uint8_t *payload, size_t len)
@@ -297,6 +386,10 @@ void print_event(const uint8_t *payload, size_t len)
 	memcpy(&event_type, payload, sizeof(event_type));
 	if (event_type == EMBIAN_EVENT_SIGNAL) {
 		print_signal_event(payload, len);
+		return;
+	}
+	if (event_type == EMBIAN_EVENT_NETWORK) {
+		print_network_event(payload, len);
 		return;
 	}
 
@@ -475,6 +568,19 @@ int main(int argc, char **argv)
 	if (!send_command(fd, initial_cmd, seq++)) {
 		close(fd);
 		return 1;
+	}
+
+	if (!options.detach && !options.status_only) {
+		if (options.clear_net_uids) {
+			(void)recv_one(fd, 1000, nullptr); /* drain HELLO ack */
+			(void)send_command(fd, EMBIAN_NL_CMD_NETWORK_CLEAR, seq++);
+		}
+		for (int i = 0; i < options.remove_net_uid_count; i++)
+			(void)send_net_uid(fd, EMBIAN_NL_CMD_NETWORK_REMOVE_UID,
+					   options.remove_net_uids[i], seq++);
+		for (int i = 0; i < options.add_net_uid_count; i++)
+			(void)send_net_uid(fd, EMBIAN_NL_CMD_NETWORK_ADD_UID,
+					   options.add_net_uids[i], seq++);
 	}
 
 	if (options.detach) {
