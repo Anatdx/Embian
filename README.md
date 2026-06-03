@@ -28,7 +28,6 @@ monitoring and a hidden user-space tombstone channel.
 
 ## Design constraints
 
-- Re-Kernel is reference material only; Embian should not copy its code.
 - Do not expose the tombstone connection through procfs.
 - Avoid making kprobe/kretprobe the default Binder interception strategy.
 - Prefer a low-overhead hook path, such as Android vendor hooks or tracepoints,
@@ -68,3 +67,10 @@ adb shell su -c 'insmod /data/local/tmp/embian.ko'
 adb shell su -c 'chmod 755 /data/local/tmp/embianctl && /data/local/tmp/embianctl --status'
 adb shell su -c '/data/local/tmp/embianctl'
 ```
+
+## Acknowledgements
+
+The monitoring scope and event taxonomy of Embian are inspired by
+[Sakion-Team/Re-Kernel](https://github.com/Sakion-Team/Re-Kernel). Thanks to
+the Re-Kernel authors for charting the problem space and publishing their
+approach.
