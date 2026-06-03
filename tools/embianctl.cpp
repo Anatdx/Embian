@@ -1,0 +1,439 @@
+/* SPDX-License-Identifier: Apache-2.0 OR GPL-2.0 */
+/*
+ * Embian - Android user-space smoke test client.
+ *
+ * License: Author's work under Apache-2.0; when used as a kernel module
+ * (or linked with the Linux kernel), GPL-2.0 applies for kernel compatibility.
+ *
+ * Author: Anatdx
+ */
+
+#include <errno.h>
+#include <linux/netlink.h>
+#include <signal.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/poll.h>
+#include <sys/socket.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+
+#include "uapi/embian_uapi.h"
+
+#ifndef TF_ONE_WAY
+#define TF_ONE_WAY 0x01u
+#endif
+
+namespace {
+
+volatile sig_atomic_t g_stop;
+
+struct Options {
+	int unit = -1;
+	int timeout_ms = -1;
+	int max_events = -1;
+	bool once = false;
+	bool status_only = false;
+	bool detach = false;
+	bool no_prctl = false;
+};
+
+struct PrctlResult {
+	long syscall_rc = -1;
+	int syscall_errno = 0;
+	embian_prctl_args args = {};
+};
+
+void on_signal(int)
+{
+	g_stop = 1;
+}
+
+const char *nl_type_name(uint16_t type)
+{
+	switch (type) {
+	case EMBIAN_NL_MSG_ACK:
+		return "ack";
+	case EMBIAN_NL_MSG_STATUS:
+		return "status";
+	case EMBIAN_NL_MSG_EVENT:
+		return "event";
+	default:
+		return "unknown";
+	}
+}
+
+const char *event_name(uint32_t type)
+{
+	switch (type) {
+	case EMBIAN_EVENT_BINDER_TRANSACTION:
+		return "binder_transaction";
+	case EMBIAN_EVENT_BINDER_REPLY:
+		return "binder_reply";
+	case EMBIAN_EVENT_BINDER_ASYNC_PRESSURE:
+		return "binder_async_pressure";
+	default:
+		return "unknown";
+	}
+}
+
+void usage(const char *argv0)
+{
+	fprintf(stderr,
+		"usage: %s [--unit N] [--status] [--once] [--timeout MS] "
+		"[--max-events N] [--detach] [--no-prctl]\n"
+		"\n"
+		"Default flow: prctl discover unit, bind netlink, prctl register, "
+		"send status, then listen.\n",
+		argv0);
+}
+
+bool parse_int(const char *text, int *out)
+{
+	char *end = nullptr;
+	long value;
+
+	errno = 0;
+	value = strtol(text, &end, 0);
+	if (errno || !end || *end || value < INT32_MIN || value > INT32_MAX)
+		return false;
+
+	*out = static_cast<int>(value);
+	return true;
+}
+
+bool parse_args(int argc, char **argv, Options *options)
+{
+	for (int i = 1; i < argc; i++) {
+		if (!strcmp(argv[i], "--unit")) {
+			if (++i >= argc || !parse_int(argv[i], &options->unit))
+				return false;
+		} else if (!strcmp(argv[i], "--timeout")) {
+			if (++i >= argc || !parse_int(argv[i], &options->timeout_ms))
+				return false;
+		} else if (!strcmp(argv[i], "--max-events")) {
+			if (++i >= argc || !parse_int(argv[i], &options->max_events))
+				return false;
+		} else if (!strcmp(argv[i], "--once")) {
+			options->once = true;
+		} else if (!strcmp(argv[i], "--status")) {
+			options->status_only = true;
+		} else if (!strcmp(argv[i], "--detach")) {
+			options->detach = true;
+			options->once = true;
+		} else if (!strcmp(argv[i], "--no-prctl")) {
+			options->no_prctl = true;
+		} else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
+			usage(argv[0]);
+			exit(0);
+		} else {
+			return false;
+		}
+	}
+
+	return true;
+}
+
+PrctlResult call_embian_prctl(uint32_t command, uint32_t portid)
+{
+	PrctlResult result;
+
+	result.args.portid = portid;
+	result.args.status = INT32_MIN;
+	result.args.netlink_unit = -1;
+	result.args.abi_version = 0;
+
+	errno = 0;
+	result.syscall_rc = syscall(__NR_prctl, EMBIAN_PRCTL_OPTION,
+				    EMBIAN_PRCTL_MAGIC, command,
+				    reinterpret_cast<unsigned long>(&result.args),
+				    0UL);
+	result.syscall_errno = errno;
+	return result;
+}
+
+bool valid_unit(int unit)
+{
+	return unit >= EMBIAN_NETLINK_MIN && unit <= EMBIAN_NETLINK_MAX;
+}
+
+int discover_unit()
+{
+	PrctlResult result = call_embian_prctl(EMBIAN_PRCTL_GET_NETLINK_UNIT, 0);
+
+	printf("prctl discover: syscall_rc=%ld errno=%d status=%d unit=%d abi=%u\n",
+	       result.syscall_rc, result.syscall_errno, result.args.status,
+	       result.args.netlink_unit, result.args.abi_version);
+
+	if (result.args.status == 0 && valid_unit(result.args.netlink_unit))
+		return result.args.netlink_unit;
+
+	return -1;
+}
+
+int open_netlink(int unit, uint32_t *portid)
+{
+	sockaddr_nl local = {};
+	socklen_t local_len = sizeof(local);
+	int fd;
+
+	fd = socket(AF_NETLINK, SOCK_DGRAM, unit);
+	if (fd < 0) {
+		perror("socket(AF_NETLINK)");
+		return -1;
+	}
+
+	local.nl_family = AF_NETLINK;
+	local.nl_pid = 0;
+	local.nl_groups = 0;
+
+	if (bind(fd, reinterpret_cast<sockaddr *>(&local), sizeof(local)) < 0) {
+		perror("bind(AF_NETLINK)");
+		close(fd);
+		return -1;
+	}
+
+	if (getsockname(fd, reinterpret_cast<sockaddr *>(&local),
+			&local_len) < 0) {
+		perror("getsockname(AF_NETLINK)");
+		close(fd);
+		return -1;
+	}
+
+	*portid = local.nl_pid;
+	printf("netlink: unit=%d portid=%u\n", unit, *portid);
+	return fd;
+}
+
+bool send_command(int fd, uint16_t type, uint32_t seq)
+{
+	embian_netlink_msg msg = {};
+	alignas(nlmsghdr) uint8_t buf[NLMSG_SPACE(sizeof(msg))] = {};
+	nlmsghdr *nlh = reinterpret_cast<nlmsghdr *>(buf);
+	sockaddr_nl kernel = {};
+	ssize_t sent;
+
+	msg.magic = EMBIAN_PRCTL_MAGIC;
+	msg.version = EMBIAN_CTL_ABI_VERSION;
+	msg.type = type;
+	msg.seq = seq;
+
+	kernel.nl_family = AF_NETLINK;
+	kernel.nl_pid = 0;
+	kernel.nl_groups = 0;
+
+	nlh->nlmsg_len = NLMSG_LENGTH(sizeof(msg));
+	nlh->nlmsg_type = type;
+	nlh->nlmsg_seq = seq;
+	memcpy(NLMSG_DATA(nlh), &msg, sizeof(msg));
+
+	sent = sendto(fd, buf, nlh->nlmsg_len, 0,
+		      reinterpret_cast<sockaddr *>(&kernel), sizeof(kernel));
+	if (sent != static_cast<ssize_t>(nlh->nlmsg_len)) {
+		perror("sendto(AF_NETLINK)");
+		return false;
+	}
+
+	return true;
+}
+
+void print_binder_event(const uint8_t *payload, size_t len)
+{
+	const embian_binder_event *event;
+
+	if (len < sizeof(*event)) {
+		printf("  short binder payload len=%zu\n", len);
+		return;
+	}
+
+	event = reinterpret_cast<const embian_binder_event *>(payload);
+	printf("  event=%s(%u) flags=0x%x from=%d/%u target=%d/%u "
+	       "code=%u data=%u offsets=%u free_async=%u requested=%u",
+	       event_name(event->event_type), event->event_type,
+	       event->binder_flags, event->from_pid, event->from_uid,
+	       event->target_pid, event->target_uid, event->code,
+	       event->data_size, event->offsets_size,
+	       event->free_async_space, event->requested_size);
+
+	if (event->event_type == EMBIAN_EVENT_BINDER_ASYNC_PRESSURE) {
+		if (event->binder_flags & EMBIAN_BINDER_EVENT_FLAG_SHOULD_FAIL)
+			printf(" should_fail=1");
+	} else {
+		printf(" oneway=%u", !!(event->binder_flags & TF_ONE_WAY));
+	}
+	if (event->binder_flags & EMBIAN_BINDER_EVENT_FLAG_TARGET_FROZEN)
+		printf(" target_frozen=1");
+	printf("\n");
+}
+
+bool recv_one(int fd, int timeout_ms, uint16_t *out_type)
+{
+	uint8_t buf[4096];
+	pollfd pfd = {
+		.fd = fd,
+		.events = POLLIN,
+		.revents = 0,
+	};
+	ssize_t len;
+	const nlmsghdr *nlh;
+	const embian_netlink_msg *msg;
+	const uint8_t *data;
+	size_t data_len;
+	size_t payload_len;
+
+	if (out_type)
+		*out_type = 0;
+
+	int rc = poll(&pfd, 1, timeout_ms);
+	if (rc < 0) {
+		if (errno == EINTR)
+			return true;
+		perror("poll");
+		return false;
+	}
+	if (rc == 0) {
+		printf("timeout\n");
+		return false;
+	}
+
+	len = recv(fd, buf, sizeof(buf), 0);
+	if (len < 0) {
+		perror("recv");
+		return false;
+	}
+	if (static_cast<size_t>(len) < sizeof(nlmsghdr)) {
+		printf("short netlink frame len=%zd\n", len);
+		return true;
+	}
+
+	nlh = reinterpret_cast<const nlmsghdr *>(buf);
+	data = reinterpret_cast<const uint8_t *>(NLMSG_DATA(nlh));
+	data_len = NLMSG_PAYLOAD(nlh, 0);
+	if (data_len < sizeof(*msg)) {
+		printf("short embian message len=%zu\n", data_len);
+		return true;
+	}
+
+	msg = reinterpret_cast<const embian_netlink_msg *>(data);
+	payload_len = data_len - sizeof(*msg);
+	printf("rx type=%s(0x%x) seq=%u status=%d portid=%u unit=%d "
+	       "abi=%u flags=0x%x payload=%zu\n",
+	       nl_type_name(msg->type), msg->type, msg->seq, msg->status,
+	       msg->portid, msg->netlink_unit, msg->abi_version, msg->flags,
+	       payload_len);
+
+	if (msg->magic != EMBIAN_PRCTL_MAGIC)
+		printf("  bad magic=0x%x\n", msg->magic);
+
+	if (msg->type == EMBIAN_NL_MSG_EVENT)
+		print_binder_event(data + sizeof(*msg), payload_len);
+
+	if (out_type)
+		*out_type = msg->type;
+	return true;
+}
+
+void detach(int fd, bool no_prctl)
+{
+	if (!no_prctl) {
+		PrctlResult result = call_embian_prctl(EMBIAN_PRCTL_DETACH_CLIENT,
+						       0);
+		printf("prctl detach: syscall_rc=%ld errno=%d status=%d\n",
+		       result.syscall_rc, result.syscall_errno,
+		       result.args.status);
+	}
+
+	if (fd >= 0)
+		(void)send_command(fd, EMBIAN_NL_CMD_DETACH, 0);
+}
+
+} // namespace
+
+int main(int argc, char **argv)
+{
+	Options options;
+	uint32_t portid = 0;
+	uint32_t seq = 1;
+	int unit;
+	int fd;
+
+	if (!parse_args(argc, argv, &options)) {
+		usage(argv[0]);
+		return 2;
+	}
+
+	unit = options.unit;
+	if (unit < 0 && !options.no_prctl)
+		unit = discover_unit();
+	if (!valid_unit(unit)) {
+		fprintf(stderr, "netlink unit unavailable; pass --unit N if needed\n");
+		return 1;
+	}
+
+	fd = open_netlink(unit, &portid);
+	if (fd < 0)
+		return 1;
+
+	if (!options.no_prctl && !options.status_only) {
+		PrctlResult result = call_embian_prctl(
+			options.detach ? EMBIAN_PRCTL_DETACH_CLIENT :
+					 EMBIAN_PRCTL_REGISTER_CLIENT,
+			portid);
+		printf("prctl %s: syscall_rc=%ld errno=%d status=%d "
+		       "unit=%d abi=%u portid=%u\n",
+		       options.detach ? "detach" : "register",
+		       result.syscall_rc, result.syscall_errno,
+		       result.args.status, result.args.netlink_unit,
+		       result.args.abi_version, result.args.portid);
+	}
+
+	uint16_t initial_cmd = EMBIAN_NL_CMD_HELLO;
+
+	if (options.detach)
+		initial_cmd = EMBIAN_NL_CMD_DETACH;
+	else if (options.status_only)
+		initial_cmd = EMBIAN_NL_CMD_STATUS;
+
+	if (!send_command(fd, initial_cmd, seq++)) {
+		close(fd);
+		return 1;
+	}
+
+	if (options.detach) {
+		(void)recv_one(fd, 1000, nullptr);
+		close(fd);
+		return 0;
+	}
+
+	if (!options.status_only)
+		(void)send_command(fd, EMBIAN_NL_CMD_PING, seq++);
+
+	signal(SIGINT, on_signal);
+	signal(SIGTERM, on_signal);
+
+	int events = 0;
+	do {
+		uint16_t type = 0;
+
+		if (!recv_one(fd, options.timeout_ms, &type))
+			break;
+
+		if (type == EMBIAN_NL_MSG_EVENT)
+			events++;
+
+		if (options.status_only && type == EMBIAN_NL_MSG_STATUS)
+			break;
+
+		if (options.max_events >= 0 && events >= options.max_events)
+			break;
+
+		if (options.once)
+			break;
+	} while (!g_stop);
+
+	detach(fd, options.no_prctl);
+	close(fd);
+	return 0;
+}
