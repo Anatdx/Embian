@@ -145,6 +145,13 @@ static void embian_netlink_handle_msg(const struct embian_netlink_msg *msg,
 		embian_network_clear();
 		status = 0;
 		break;
+	case EMBIAN_NL_CMD_DISARM_PRCTL:
+		if (!embian_netlink_portid_is_client(portid)) {
+			status = -EPERM;
+			break;
+		}
+		status = embian_prctl_disarm();
+		break;
 	default:
 		status = -EINVAL;
 		break;

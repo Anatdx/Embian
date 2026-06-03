@@ -269,18 +269,39 @@ int embian_prctl_init(void)
 	return 0;
 }
 
+static void embian_prctl_remove_hook(void)
+{
+	embian_syscall_fn orig;
+
+	if (!embian_prctl_tsr_registered || !embian_sys_call_table ||
+	    !embian_orig_prctl)
+		return;
+
+	orig = embian_orig_prctl;
+	(void)embian_patch_text(&embian_sys_call_table[__NR_prctl], &orig,
+				sizeof(orig));
+	embian_prctl_tsr_registered = false;
+	synchronize_srcu(&embian_prctl_srcu);
+	pr_info("TSR hook unregistered\n");
+}
+
+bool embian_prctl_is_armed(void)
+{
+	return READ_ONCE(embian_prctl_tsr_registered);
+}
+
+int embian_prctl_disarm(void)
+{
+	if (!embian_prctl_is_armed())
+		return -EALREADY;
+
+	embian_prctl_remove_hook();
+	return 0;
+}
+
 void embian_prctl_exit(void)
 {
-	if (embian_prctl_tsr_registered && embian_sys_call_table &&
-	    embian_orig_prctl) {
-		embian_syscall_fn orig = embian_orig_prctl;
-
-		(void)embian_patch_text(&embian_sys_call_table[__NR_prctl],
-					&orig, sizeof(orig));
-		embian_prctl_tsr_registered = false;
-		synchronize_srcu(&embian_prctl_srcu);
-	}
-
+	embian_prctl_remove_hook();
 	embian_orig_prctl = NULL;
 	embian_sys_call_table = NULL;
 }

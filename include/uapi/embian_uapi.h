@@ -72,6 +72,7 @@ enum embian_netlink_command {
 	EMBIAN_NL_CMD_NETWORK_ADD_UID = 5,
 	EMBIAN_NL_CMD_NETWORK_REMOVE_UID = 6,
 	EMBIAN_NL_CMD_NETWORK_CLEAR = 7,
+	EMBIAN_NL_CMD_DISARM_PRCTL = 8,
 };
 
 struct embian_network_uid_args {

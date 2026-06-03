@@ -42,6 +42,7 @@ struct Options {
 	bool detach = false;
 	bool no_prctl = false;
 	bool clear_net_uids = false;
+	bool disarm_prctl = false;
 	int add_net_uid_count = 0;
 	int remove_net_uid_count = 0;
 	uint32_t add_net_uids[MAX_NET_UIDS] = {};
@@ -158,6 +159,7 @@ void usage(const char *argv0)
 		"[--max-events N] [--drop-uid N] [--detach] [--no-prctl]\n"
 		"           [--add-net-uid N]... [--remove-net-uid N]... "
 		"[--clear-net-uids]\n"
+		"           [--disarm-prctl]\n"
 		"\n"
 		"Default flow: prctl discover unit, bind netlink, prctl register, "
 		"send status, then listen.\n",
@@ -220,6 +222,8 @@ bool parse_args(int argc, char **argv, Options *options)
 				static_cast<uint32_t>(uid);
 		} else if (!strcmp(argv[i], "--clear-net-uids")) {
 			options->clear_net_uids = true;
+		} else if (!strcmp(argv[i], "--disarm-prctl")) {
+			options->disarm_prctl = true;
 		} else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
 			usage(argv[0]);
 			exit(0);
@@ -581,6 +585,9 @@ int main(int argc, char **argv)
 		for (int i = 0; i < options.add_net_uid_count; i++)
 			(void)send_net_uid(fd, EMBIAN_NL_CMD_NETWORK_ADD_UID,
 					   options.add_net_uids[i], seq++);
+		if (options.disarm_prctl)
+			(void)send_command(fd, EMBIAN_NL_CMD_DISARM_PRCTL,
+					   seq++);
 	}
 
 	if (options.detach) {

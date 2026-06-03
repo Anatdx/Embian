@@ -50,6 +50,8 @@ void embian_control_get_snapshot(struct embian_control_snapshot *snapshot);
 
 int embian_prctl_init(void);
 void embian_prctl_exit(void);
+int embian_prctl_disarm(void);
+bool embian_prctl_is_armed(void);
 
 u32 embian_task_uid_value(const struct task_struct *task);
 bool embian_task_is_frozen(const struct task_struct *task);
