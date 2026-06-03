@@ -32,6 +32,9 @@
 #define EMBIAN_PRCTL_SYSTEM_SERVER_CTX "u:r:system_server:s0"
 
 typedef long (*embian_syscall_fn)(const struct pt_regs *regs);
+typedef void (*embian_security_current_getsecid_subj_fn)(u32 *secid);
+typedef void (*embian_security_cred_getsecid_fn)(const struct cred *cred,
+						 u32 *secid);
 
 static void **embian_sys_call_table;
 static embian_syscall_fn embian_orig_prctl;
@@ -113,6 +116,29 @@ static bool embian_prctl_secctx_equals(const char *secctx, u32 seclen,
 	return false;
 }
 
+static void EMBIAN_NOCFI embian_prctl_current_getsecid(u32 *secid)
+{
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0)
+	embian_security_current_getsecid_subj_fn fn;
+
+	fn = (embian_security_current_getsecid_subj_fn)
+		embian_symbol_addr(EMBIAN_SYM_SECURITY_CURRENT_GETSECID_SUBJ);
+#else
+	embian_security_cred_getsecid_fn fn;
+
+	fn = (embian_security_cred_getsecid_fn)
+		embian_symbol_addr(EMBIAN_SYM_SECURITY_CRED_GETSECID);
+#endif
+	if (!fn)
+		return;
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0)
+	fn(secid);
+#else
+	fn(current_cred(), secid);
+#endif
+}
+
 static bool embian_prctl_current_selinux_allowed(void)
 {
 	char *secctx = NULL;
@@ -120,11 +146,7 @@ static bool embian_prctl_current_selinux_allowed(void)
 	u32 secid = 0;
 	bool allowed;
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0)
-	security_current_getsecid_subj(&secid);
-#else
-	security_cred_getsecid(current_cred(), &secid);
-#endif
+	embian_prctl_current_getsecid(&secid);
 	if (!secid)
 		return false;
 

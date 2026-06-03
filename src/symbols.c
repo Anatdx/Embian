@@ -66,6 +66,15 @@ static struct embian_symbol_entry embian_symbol_table[EMBIAN_SYM_COUNT] = {
 	[EMBIAN_SYM_BINDER_STATS] = {
 		.primary = "binder_stats",
 	},
+	[EMBIAN_SYM_COPY_FROM_USER_NOFAULT] = {
+		.primary = "copy_from_user_nofault",
+	},
+	[EMBIAN_SYM_SECURITY_CURRENT_GETSECID_SUBJ] = {
+		.primary = "security_current_getsecid_subj",
+	},
+	[EMBIAN_SYM_SECURITY_CRED_GETSECID] = {
+		.primary = "security_cred_getsecid",
+	},
 };
 
 static bool embian_valid_symbol_addr(unsigned long addr)

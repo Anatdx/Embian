@@ -11,6 +11,7 @@
 #define pr_fmt(fmt) "embian: binder: " fmt
 
 #include <linux/cgroup.h>
+#include <linux/errno.h>
 #include <linux/freezer.h>
 #include <linux/kernel.h>
 #include <linux/printk.h>
@@ -26,6 +27,10 @@
 #include <uapi/linux/android/binder.h>
 
 #include "embian.h"
+
+typedef long (*embian_copy_from_user_nofault_fn)(void *dst,
+						 const void __user *src,
+						 size_t size);
 
 static void embian_binder_resolve_symbols(void)
 {
@@ -167,6 +172,19 @@ static void embian_binder_decode_utf16_ascii(struct embian_binder_event *event,
 			EMBIAN_BINDER_EVENT_FLAG_INTERFACE_TRUNCATED;
 }
 
+static long EMBIAN_NOCFI embian_binder_copy_from_user_nofault(
+	void *dst, const void __user *src, size_t size)
+{
+	embian_copy_from_user_nofault_fn fn;
+
+	fn = (embian_copy_from_user_nofault_fn)
+		embian_symbol_addr(EMBIAN_SYM_COPY_FROM_USER_NOFAULT);
+	if (!fn)
+		return -ENOENT;
+
+	return fn(dst, src, size);
+}
+
 static void embian_binder_parse_interface(struct embian_binder_event *event,
 					  struct binder_transaction_data *tr)
 {
@@ -188,7 +206,7 @@ static void embian_binder_parse_interface(struct embian_binder_event *event,
 	if (!copy_len)
 		return;
 
-	if (copy_from_user_nofault(raw, user, copy_len)) {
+	if (embian_binder_copy_from_user_nofault(raw, user, copy_len)) {
 		event->binder_flags |=
 			EMBIAN_BINDER_EVENT_FLAG_INTERFACE_COPY_FAILED;
 		return;
