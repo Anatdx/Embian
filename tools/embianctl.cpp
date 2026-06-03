@@ -75,6 +75,8 @@ const char *event_name(uint32_t type)
 		return "binder_reply";
 	case EMBIAN_EVENT_BINDER_ASYNC_PRESSURE:
 		return "binder_async_pressure";
+	case EMBIAN_EVENT_BINDER_ASYNC_CLEANUP:
+		return "binder_async_cleanup";
 	default:
 		return "unknown";
 	}
