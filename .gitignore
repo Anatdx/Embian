@@ -12,3 +12,4 @@ out/
 Module.markers
 modules.builtin
 modules.builtin.modinfo
+compile_commands.json
