@@ -14,6 +14,8 @@
 #include <linux/types.h>
 #include <linux/uidgid.h>
 
+struct task_struct;
+
 #include "uapi/embian_uapi.h"
 
 #define EMBIAN_NAME "embian"
@@ -48,6 +50,9 @@ void embian_control_get_snapshot(struct embian_control_snapshot *snapshot);
 
 int embian_prctl_init(void);
 void embian_prctl_exit(void);
+
+u32 embian_task_uid_value(const struct task_struct *task);
+bool embian_task_is_frozen(const struct task_struct *task);
 
 int embian_symbols_init(void);
 void embian_symbols_exit(void);
@@ -88,5 +93,8 @@ int embian_netlink_send_payload(u16 type, u32 seq, s32 status, u32 flags,
 
 int embian_binder_init(void);
 void embian_binder_exit(void);
+
+int embian_signal_init(void);
+void embian_signal_exit(void);
 
 #endif /* EMBIAN_H */

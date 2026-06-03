@@ -77,6 +77,8 @@ const char *event_name(uint32_t type)
 		return "binder_async_pressure";
 	case EMBIAN_EVENT_BINDER_ASYNC_CLEANUP:
 		return "binder_async_cleanup";
+	case EMBIAN_EVENT_SIGNAL:
+		return "signal";
 	default:
 		return "unknown";
 	}
@@ -267,8 +269,37 @@ bool send_command(int fd, uint16_t type, uint32_t seq)
 	return true;
 }
 
-void print_binder_event(const uint8_t *payload, size_t len)
+void print_signal_event(const uint8_t *payload, size_t len)
 {
+	const embian_signal_event *event;
+
+	if (len < sizeof(*event)) {
+		printf("  short signal payload len=%zu\n", len);
+		return;
+	}
+
+	event = reinterpret_cast<const embian_signal_event *>(payload);
+	printf("  event=%s(%u) signo=%d killer=%d/%u dst=%d/%u\n",
+	       event_name(event->event_type), event->event_type,
+	       event->signo, event->killer_pid, event->killer_uid,
+	       event->dst_pid, event->dst_uid);
+}
+
+void print_event(const uint8_t *payload, size_t len)
+{
+	uint32_t event_type;
+
+	if (len < sizeof(event_type)) {
+		printf("  short event payload len=%zu\n", len);
+		return;
+	}
+
+	memcpy(&event_type, payload, sizeof(event_type));
+	if (event_type == EMBIAN_EVENT_SIGNAL) {
+		print_signal_event(payload, len);
+		return;
+	}
+
 	const embian_binder_event *event;
 
 	if (len < sizeof(*event)) {
@@ -362,7 +393,7 @@ bool recv_one(int fd, int timeout_ms, uint16_t *out_type)
 		printf("  bad magic=0x%x\n", msg->magic);
 
 	if (msg->type == EMBIAN_NL_MSG_EVENT)
-		print_binder_event(data + sizeof(*msg), payload_len);
+		print_event(data + sizeof(*msg), payload_len);
 
 	if (out_type)
 		*out_type = msg->type;

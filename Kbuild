@@ -6,10 +6,12 @@ embian-y := \
 	src/embian.o \
 	src/symbols.o \
 	src/control.o \
+	src/task_state.o \
 	src/patch_memory.o \
 	src/prctl.o \
 	src/netlink.o \
-	src/binder.o
+	src/binder.o \
+	src/signal.o
 
 ccflags-y += -I$(src)/src
 ccflags-y += -I$(src)/include
