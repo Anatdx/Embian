@@ -1,0 +1,69 @@
+name: Build LKM for Embian
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - feat/**
+      - dev
+  pull_request:
+
+jobs:
+  build-lkm:
+    strategy:
+      fail-fast: false
+      matrix:
+        arch:
+          - arm64
+        kmi:
+          - android12-5.10
+          - android13-5.10
+          - android13-5.15
+          - android14-5.15
+          - android14-6.1
+          - android15-6.6
+          - android16-6.12
+    uses: ./.github/workflows/ddk-lkm.yml
+    secrets: inherit
+    with:
+      arch: ${{ matrix.arch }}
+      kmi: ${{ matrix.kmi }}
+      ddk_release: "20251104"
+
+  merge-lkm:
+    name: Merge all LKM artifacts
+    needs: build-lkm
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all LKM artifacts
+        uses: actions/download-artifact@v5
+
+      - name: Merge into lkm folder
+        run: |
+          mkdir -p lkm
+          find . -name "*.ko" -path "*embian*" -exec cp {} lkm/ \;
+          ls -la lkm/
+
+      - name: Upload combined LKM artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: embian-lkm-all
+          path: lkm/
+
+      - name: Create zip archive
+        run: |
+          zip -r embian-lkm.zip lkm/
+          ls -la embian-lkm.zip
+
+      - name: Prepare zip artifact
+        run: |
+          mkdir -p dist
+          cp embian-lkm.zip dist/
+
+      - name: Upload zip artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: embian-lkm-zip
+          path: dist/

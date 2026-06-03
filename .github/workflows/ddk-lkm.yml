@@ -1,0 +1,69 @@
+name: Build Embian Kernel Module
+
+on:
+  workflow_call:
+    inputs:
+      arch:
+        description: "Target architecture"
+        required: true
+        type: string
+      kmi:
+        description: "KMI version"
+        required: true
+        type: string
+      ddk_release:
+        description: "DDK release version"
+        required: false
+        default: "20251104"
+        type: string
+
+jobs:
+  build-embian-ko:
+    name: Build embian.ko for ${{ inputs.kmi }}
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/ylarod/ddk:${{ inputs.kmi }}-${{ inputs.ddk_release }}
+      options: --privileged
+    env:
+      TARGET_ARCH: ${{ inputs.arch }}
+      KMI: ${{ inputs.kmi }}
+      OUT: ${{ github.workspace }}/out
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Fix git safe.directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Validate target arch
+        run: |
+          if [ "$TARGET_ARCH" != "arm64" ]; then
+            echo "DDK workflow currently supports arm64 only, got: $TARGET_ARCH"
+            exit 1
+          fi
+
+      - name: Build embian.ko
+        run: |
+          set -euo pipefail
+          if [ -z "${KDIR:-}" ] || [ ! -f "$KDIR/Makefile" ]; then
+            echo "KDIR is not available inside DDK container: ${KDIR:-<empty>}"
+            exit 1
+          fi
+
+          echo "Building embian.ko with KDIR=$KDIR"
+          make -j"$(nproc --all)" CC=clang
+
+          mkdir -p "$OUT"
+          KO_FILE="${KMI}_${TARGET_ARCH}_embian.ko"
+          cp embian.ko "$OUT/$KO_FILE"
+          llvm-strip -d "$OUT/$KO_FILE" 2>/dev/null || true
+          ls -la "$OUT/"
+
+      - name: Upload .ko
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ inputs.kmi }}_${{ env.TARGET_ARCH }}_embian.ko
+          path: ${{ env.OUT }}/${{ inputs.kmi }}_${{ env.TARGET_ARCH }}_embian.ko
