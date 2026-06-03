@@ -309,7 +309,7 @@ static void embian_binder_alloc_pressure_event(size_t size,
 	embian_binder_send_event(&event);
 }
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 6, 0)
 static void embian_binder_alloc_new_buf_locked(void *data, size_t size,
 					       size_t *free_async_space,
 					       int is_async, bool *should_fail)
