@@ -80,6 +80,28 @@ const char *event_name(uint32_t type)
 	}
 }
 
+void print_escaped_token(const char *token, uint32_t len)
+{
+	uint32_t limit = len;
+
+	if (limit > EMBIAN_BINDER_INTERFACE_MAX)
+		limit = EMBIAN_BINDER_INTERFACE_MAX;
+
+	printf(" iface=\"");
+	for (uint32_t i = 0; i < limit && token[i]; i++) {
+		unsigned char ch = static_cast<unsigned char>(token[i]);
+
+		if (ch == '\\' || ch == '"') {
+			printf("\\%c", ch);
+		} else if (ch >= 0x20 && ch < 0x7f) {
+			putchar(ch);
+		} else {
+			printf("\\x%02x", ch);
+		}
+	}
+	printf("\"");
+}
+
 void usage(const char *argv0)
 {
 	fprintf(stderr,
@@ -269,6 +291,12 @@ void print_binder_event(const uint8_t *payload, size_t len)
 	}
 	if (event->binder_flags & EMBIAN_BINDER_EVENT_FLAG_TARGET_FROZEN)
 		printf(" target_frozen=1");
+	if (event->binder_flags & EMBIAN_BINDER_EVENT_FLAG_INTERFACE)
+		print_escaped_token(event->interface_token, event->interface_len);
+	if (event->binder_flags & EMBIAN_BINDER_EVENT_FLAG_INTERFACE_TRUNCATED)
+		printf(" iface_truncated=1");
+	if (event->binder_flags & EMBIAN_BINDER_EVENT_FLAG_INTERFACE_COPY_FAILED)
+		printf(" iface_copy_failed=1");
 	printf("\n");
 }
 

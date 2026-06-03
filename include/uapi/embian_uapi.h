@@ -30,9 +30,14 @@ typedef int32_t embian_s32;
 #define EMBIAN_NETLINK_MIN 25
 #define EMBIAN_NETLINK_MAX 31
 #define EMBIAN_BINDER_ASYNC_WARN_SPACE (1U << 17)
+#define EMBIAN_BINDER_INTERFACE_TOKEN_OFFSET 16U
+#define EMBIAN_BINDER_INTERFACE_MAX 96U
 #define EMBIAN_ANDROID_APP_UID_MIN 10000U
 #define EMBIAN_ANDROID_SYSTEM_UID_MAX 2000U
 
+#define EMBIAN_BINDER_EVENT_FLAG_INTERFACE (1U << 27)
+#define EMBIAN_BINDER_EVENT_FLAG_INTERFACE_TRUNCATED (1U << 28)
+#define EMBIAN_BINDER_EVENT_FLAG_INTERFACE_COPY_FAILED (1U << 29)
 #define EMBIAN_BINDER_EVENT_FLAG_SHOULD_FAIL (1U << 30)
 #define EMBIAN_BINDER_EVENT_FLAG_TARGET_FROZEN (1U << 31)
 
@@ -92,6 +97,8 @@ struct embian_binder_event {
 	embian_u32 offsets_size;
 	embian_u32 free_async_space;
 	embian_u32 requested_size;
+	embian_u32 interface_len;
+	char interface_token[EMBIAN_BINDER_INTERFACE_MAX];
 };
 
 #endif /* EMBIAN_UAPI_H */

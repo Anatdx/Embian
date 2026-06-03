@@ -19,6 +19,7 @@
 #include <linux/sched.h>
 #include <linux/sched/jobctl.h>
 #include <linux/uidgid.h>
+#include <linux/uaccess.h>
 #include <linux/version.h>
 #include <trace/hooks/binder.h>
 #include <binder_alloc.h>
@@ -156,6 +157,65 @@ static void embian_binder_send_event(const struct embian_binder_event *event)
 					  event, sizeof(*event));
 }
 
+static void embian_binder_decode_utf16_ascii(struct embian_binder_event *event,
+					     const u8 *raw, size_t raw_len)
+{
+	size_t raw_pos;
+	size_t out = 0;
+
+	for (raw_pos = 0; raw_pos + 1 < raw_len &&
+			  out + 1 < sizeof(event->interface_token);
+	     raw_pos += 2) {
+		u16 ch = raw[raw_pos] | ((u16)raw[raw_pos + 1] << 8);
+
+		if (!ch)
+			break;
+
+		event->interface_token[out++] = ch <= 0x7f ? (char)ch : '?';
+	}
+
+	if (!out)
+		return;
+
+	event->interface_token[out] = '\0';
+	event->interface_len = (u32)out;
+	event->binder_flags |= EMBIAN_BINDER_EVENT_FLAG_INTERFACE;
+
+	if (raw_pos + 1 < raw_len && out + 1 >= sizeof(event->interface_token))
+		event->binder_flags |=
+			EMBIAN_BINDER_EVENT_FLAG_INTERFACE_TRUNCATED;
+}
+
+static void embian_binder_parse_interface(struct embian_binder_event *event,
+					  struct binder_transaction_data *tr)
+{
+	u8 raw[EMBIAN_BINDER_INTERFACE_MAX * 2];
+	const void __user *user;
+	size_t copy_len;
+
+	if (!event || !tr)
+		return;
+
+	if (tr->data_size <= EMBIAN_BINDER_INTERFACE_TOKEN_OFFSET)
+		return;
+
+	user = (const void __user *)((uintptr_t)tr->data.ptr.buffer +
+				    EMBIAN_BINDER_INTERFACE_TOKEN_OFFSET);
+	copy_len = min_t(binder_size_t,
+			 tr->data_size - EMBIAN_BINDER_INTERFACE_TOKEN_OFFSET,
+			 sizeof(raw));
+	if (!copy_len)
+		return;
+
+	if (copy_from_user_nofault(raw, user, copy_len)) {
+		event->binder_flags |=
+			EMBIAN_BINDER_EVENT_FLAG_INTERFACE_COPY_FAILED;
+		return;
+	}
+
+	embian_binder_decode_utf16_ascii(event, raw, copy_len);
+}
+
 static void embian_binder_transaction_event(u32 event_type,
 					    struct binder_proc *target_proc,
 					    struct binder_proc *proc,
@@ -196,6 +256,9 @@ static void embian_binder_transaction_event(u32 event_type,
 	if (event_type == EMBIAN_EVENT_BINDER_TRANSACTION && oneway &&
 	    (tr->code < 29 || tr->code > 32))
 		return;
+
+	if (event_type == EMBIAN_EVENT_BINDER_TRANSACTION)
+		embian_binder_parse_interface(&event, tr);
 
 	embian_binder_send_event(&event);
 }
